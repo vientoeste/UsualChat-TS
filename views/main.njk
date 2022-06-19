@@ -1,0 +1,207 @@
+{% extends 'layout.html' %}
+
+{% block content %}
+<h1>UsualChat 채팅방</h1>
+<h2><button type="button" onclick="location.href='/logout'" style="position:relative"> 로그아웃 </button></h2>
+<fieldset style="float: left">
+  <legend>채팅방</legend>
+  <table>
+    <thead>
+    <tr>
+      <th>방 제목</th>
+      <th>종류</th>
+      <th>허용 인원</th>
+      <th>방장</th>
+    </tr>
+    </thead>
+    <tbody>
+    {% for room in rooms %}
+      <tr data-id="{{room._id}}">
+        <td>{{room.title}}</td>
+        <td>{{'비밀방' if room.password else '공개방'}}</td>
+        <td>{{room.max}}</td>
+        <td>{{room.owner}}</td>
+        <td>
+          <button
+            data-password="{{'true' if room.password else 'false'}}"
+            data-id="{{room._id}}"
+            class="register-btn"
+          >입장
+          </button>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <div class="error-message">{{error}}</div>
+  <a href="/room">채팅방 생성</a>
+</fieldset>
+<fieldset style="float: left">
+  <legend>친구</legend>
+  <table>
+    <thead>
+    <tr>
+      <th>아이디</th>
+      <th>1:1 채팅</th>
+      <th>친구 삭제</th>
+    </tr>
+    </thead>
+    <tbody>
+      {% for friend in accfriends %}
+      <tr>
+        <td>{% if un === friend.receiver %}
+          {{friend.sender}}
+          {% else %}
+          {{friend.receiver}}
+          {% endif %}</td>
+        <td>
+          <form action='/dm' method='post'>
+            <input type='text' name='friend' value=
+              {% if un === friend.receiver %}
+              '{{friend.sender}}'
+              {% else %}
+              '{{friend.receiver}}'
+              {% endif %} 
+              style='display: none;'>
+            <button type='submit'>입장</button>
+          </form>
+        </td>
+        <td>
+          <form id="delfriend" action="/friend/{{friend._id}}/delete" method='post'>
+            {# <input type='text' name='id' value='{{friend._id}}' style='display: none;'> #}
+            <button type='submit'>친구 삭제</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <br>
+  <input type="checkbox" id="friendBtn" style="position: fixed; left:-9999px"><label for="friendBtn" class="friendBtn" style="cursor:pointer"><b>친구 관리</b></label>
+  <div class='friend'>
+    친구 추가<br>
+    <form action='/friend' method="post" id="addfriend" >
+      <input type="text" size="15" id="friend" name="friend"><button type="submit">추가</button>
+    </form>
+    <br>친구 요청
+    <table>
+      <thead> 
+        <tr>
+          <th>아이디</th>
+          <th>날짜</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for friend in friendreqs %}
+        <tr data-id="{{friend._id}}">
+          <td>{{friend.sender}}</td>
+          <td>{{friend.createdAt}}</td>
+          <td>
+            <form action="/friend/{{friend._id}}" method="post" id="accept">
+              <button type="submit">O</button>
+            </form>
+            <form action="/friend/{{friend._id}}/deletereq" method="post" id="reject">
+              <button type="submit">X</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</fieldset>
+<a href="/unregister" type="button">회원 탈퇴</button>
+<script src="https://unpkg.com/axios/dist/axios.min.js"></script>
+<script src="/socket.io/socket.io.js"></script>
+<script>
+  const socket = io.connect('http://usualchat.ga:3001/room', {
+    path: '/socket.io',
+  });
+
+  socket.on('newRoom', function (data) {
+    const tr = document.createElement('tr');
+    let td = document.createElement('td');
+    td.textContent = data.title;
+    tr.appendChild(td);
+    td = document.createElement('td');
+    td.textContent = data.password ? '비밀방' : '공개방';
+    tr.appendChild(td);
+    td = document.createElement('td');
+    td.textContent = data.max;
+    tr.appendChild(td);
+    td = document.createElement('td');
+    td.textContent = data.owner;
+    tr.appendChild(td);
+    td = document.createElement('td');
+    const button = document.createElement('button');
+    button.textContent = '입장';
+    button.dataset.password = data.password ? 'true' : 'false';
+    button.dataset.id = data._id;
+    button.addEventListener('click', addBtnEvent);
+    td.appendChild(button);
+    tr.appendChild(td);
+    tr.dataset.id = data._id;
+    document.querySelector('table tbody').appendChild(tr);
+  });
+
+  socket.on('removeRoom', function (data) {
+    document.querySelectorAll('tbody tr').forEach(function (tr) {
+      if (tr.dataset.id === data) {
+        tr.parentNode.removeChild(tr);
+      }
+    });
+  });
+
+  function addBtnEvent(e) {
+    if (e.target.dataset.password === 'true') {
+      const password = prompt('비밀번호를 입력하세요');
+      location.href = '/room/' + e.target.dataset.id + '?password=' + password;
+    } else {
+      location.href = '/room/' + e.target.dataset.id;
+    }
+  }
+
+  document.querySelectorAll('.register-btn').forEach(function (btn) {
+    btn.addEventListener('click', addBtnEvent);
+  });
+  document.querySelector('#addfriend').addEventListener('submit', e => {
+    e.preventDefault();
+    axios.post('/friend', {
+      friend: this.friend.value,
+    })
+    .then(() => {
+      e.target.friend.value = '';
+    })
+    .catch((err) => {
+      console.error(err);
+    });
+  })
+
+  document.querySelector("#delfriend").addEventListener('submit', e => {
+    axios({
+      url: 'http://usualchat.ga:3001/friend/',
+      method: 'delete',
+      data: {
+        friendid: this.friendid.value
+      }
+    })
+  })
+  document.querySelector('#accept').addEventListener('submit', (e) => {
+    alert('친구 요청을 수락했습니다.')
+  })
+  document.querySelector('#reject').addEventListener('submit', (e) => {
+    alert('친구 요청을 거절했습니다.')
+  })
+
+</script>
+{% endblock %}
+
+{% block script %}
+<script>
+  window.onload = () => {
+    if (new URL(location.href).searchParams.get('error')) {
+      alert(new URL(location.href).searchParams.get('error'));
+    }
+  };
+</script>
+{% endblock %}

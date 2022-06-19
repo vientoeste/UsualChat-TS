@@ -1,0 +1,20 @@
+{
+  "name": "usualchat-ts",
+  "version": "0.0.1",
+  "description": "UsualChat - Chatting application for Web, Mobile devices",
+  "main": "app.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "tsc && node ex.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/vientoeste/UsualChat-TS.git"
+  },
+  "author": "este",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/vientoeste/UsualChat-TS/issues"
+  },
+  "homepage": "https://github.com/vientoeste/UsualChat-TS#readme"
+}
