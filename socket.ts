@@ -1,8 +1,31 @@
-const SocketIO = require('socket.io');
-const cookieParser = require('cookie-parser');
+import cookieParser from 'cookie-parser';
+// import { SocketIO } from 'socket.io';
 
-module.exports = (server, app, sessionMiddleware) => {
+// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+const SocketIO = require('socket.io');
+
+export interface ServerToClientEvents {
+  noArg: () => void;
+  basicEmit: (a: number, b: string, c: Buffer) => void;
+  withAck: (d: string, callback: (e: number) => void) => void;
+}
+
+export interface ClientToServerEvents {
+  hello: () => void;
+}
+
+export interface InterServerEvents {
+  ping: () => void;
+}
+
+export interface SocketData {
+  name: string;
+  age: number;
+}
+
+export function webSocket(server, app, sessionMiddleware): void {
   const io = SocketIO(server, { path: '/socket.io' });
+
   app.set('io', io);
   const room = io.of('/room');
   const chat = io.of('/chat');
@@ -45,4 +68,4 @@ module.exports = (server, app, sessionMiddleware) => {
       socket.to(data.room).emit(data);
     });
   });
-};
+}

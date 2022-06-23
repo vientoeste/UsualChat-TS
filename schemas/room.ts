@@ -1,4 +1,5 @@
-const mongoose = require('mongoose');
+import mongoose = require('mongoose');
+import { RoomINF } from '../interfaces';
 
 const { Schema } = mongoose;
 const roomSchema = new Schema({
@@ -28,4 +29,4 @@ const roomSchema = new Schema({
   target: String,
 });
 
-module.exports = mongoose.model('Room', roomSchema);
+export const Room = mongoose.model<RoomINF & mongoose.Document>('Room', roomSchema);
