@@ -26,3 +26,6 @@
 # commit 별 수정 사항
 ## 
 - TS를 이용한 UsualChat 리마스터를 위한 첫 커밋
+
+## 
+- eslint 적용

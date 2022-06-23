@@ -1,31 +1,35 @@
-const express = require('express');
-const path = require('path');
-const nunjucks = require('nunjucks');
-const dotenv = require('dotenv');
-const morgan = require('morgan');
-const session = require('express-session');
-const cookieParser = require('cookie-parser');
-const passport = require('passport');
-const passportLocalMongoose = require('passport-local-mongoose');
-const mongoose = require('mongoose');
-const fs = require('fs');
-const multer = require('multer');
-const resTime = require('response-time');
-const chalk = require('chalk');
-const jwt = require('jsonwebtoken')
-const { ExtractJwt, Strategy: JWTStrategy } = require('passport-jwt');
+import * as express from 'express';
+import { NextFunction, Request, Response } from 'express';
+import path = require('path');
+import nunjucks = require('nunjucks');
+import dotenv from 'dotenv';
+import morgan from 'morgan';
+import session from 'express-session';
+import cookieParser from 'cookie-parser';
+import passport from 'passport';
+import passportLocalMongoose from 'passport-local-mongoose';
+import mongoose, { PassportLocalOptions } from 'mongoose';
+import fs from 'fs';
+import multer from 'multer';
+import resTime from 'response-time';
+import chalk from 'chalk';
+import jwt from 'jsonwebtoken';
+import PassJWT from 'passport-jwt';
+import connect from './schemas';
+import { webSocket } from './socket';
+import { Room } from './schemas/room';
+import { Chat } from './schemas/chat';
+import { Friend } from './schemas/friend';
+import { Flag } from './schemas/flag';
+import { FriendINF, RoomINF, UserINF } from './interfaces';
+
+const { ExtractJwt } = PassJWT;
+const JWTStrategy = PassJWT.Strategy;
+// const { ExtractJwt, Strategy: JWTStrategy } = require('passport-jwt');
 
 dotenv.config();
 
-const webSocket = require('./socket');
-const connect = require('./schemas');
-
-const Room = require('./schemas/room');
-const Chat = require('./schemas/chat');
-const Friend = require('./schemas/friend');
-const Flag = require('./schemas/flag');
-
-const app = express();
+const app: express.Application = express.default();
 
 app.set('port', process.env.PORT || 3001);
 app.set('view engine', 'njk');
@@ -35,10 +39,10 @@ nunjucks.configure('views', {
   watch: true,
 });
 
-const sessionMiddleware = session({
+const sessionMiddleware: express.RequestHandler = session({
   resave: false,
   saveUninitialized: false,
-  secret: process.env.COOKIE_SECRET,
+  secret: process.env.COOKIE_SECRET || 'default',
   cookie: {
     httpOnly: true,
     secure: false,
@@ -54,16 +58,18 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser(process.env.COOKIE_SECRET));
 app.use(sessionMiddleware);
-app.use(resTime((req, res, time) => {
-  if(time >= 1000) {
-    console.log('\x1b[1m',chalk.white.bgRed(`1초 이상(${time/1000}초) 걸린 요청: ${req.method} ${req.url}`))
+app.use(resTime((req: Request, res: Response, time: number) => {
+  if (time >= 1000) {
+    console.log('\x1b[1m', chalk.white.bgRed(`1초 이상(${time / 1000}초) 걸린 요청: ${req.method} ${req.url}`));
   }
-}))
+}));
 
 app.use(passport.initialize());
 app.use(passport.session());
 
-connect();
+connect(process.env.MONGO_ID || 'default',
+  process.env.MONGO_PASSWORD || 'default',
+  process.env.NODE_ENV || 'default');
 
 const userSchema = new mongoose.Schema({
   username: String,
@@ -72,8 +78,9 @@ const userSchema = new mongoose.Schema({
 
 userSchema.plugin(passportLocalMongoose);
 
-const User = new mongoose.model('User', userSchema);
+const User: passportLocalMongoose.PassportLocalModel<UserINF & mongoose.Document> = mongoose.model<UserINF & mongoose.Document>('User', userSchema);
 
+// eslint-disable-next-line @typescript-eslint/no-unsafe-argument
 passport.use(User.createStrategy());
 
 const JWTConfig = {
@@ -81,9 +88,11 @@ const JWTConfig = {
   secretOrKey: process.env.COOKIE_SECRET,
 };
 
-const JWTVerify = async (jwtPayload, cb) => {
+const JWTVerify = async (jwtPayload, cb: (e: Error,
+  isSucceed?: UserINF | boolean,
+  reason?: { [key: string]: string }) => void) => {
   try {
-    const user = await User.findById({ _id: jwtPayload.id })
+    const user: UserINF = await User.findById({_id: jwtPayload.id });
     if (user) {
       cb(null, user);
       return;
@@ -95,67 +104,76 @@ const JWTVerify = async (jwtPayload, cb) => {
   }
 };
 
-passport.use('jwt', new JWTStrategy(JWTConfig, JWTVerify))
+passport.use('jwt', new JWTStrategy(JWTConfig, JWTVerify));
 
 passport.serializeUser(User.serializeUser());
 passport.deserializeUser(User.deserializeUser());
 
-app.route('/mobile').get(passport.authenticate('jwt'), async (req, res, next) => {
+app.route('/mobile').get(passport.authenticate('jwt'), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const un = req.user.username;
-    const rooms = await Room.find({
-      isDM: false
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+    const un: string = req.user.username || 'undefined';
+    if (un === 'undefined') {
+      throw Error('username undefined');
+    }
+    type ShortenRoomINF = Pick<RoomINF, 'title'>;
+    const rooms: ShortenRoomINF[] = await Room.find({
+      isDM: false,
     }).select('_id title');
     const friendreqs = await Friend.find({
       receiver: un,
-      isAccepted: false
+      isAccepted: false,
     }).select('-_id sender');
     const accfriends = await Friend.find({
       $or: [{
-        sender: un
+        sender: un,
       }, {
-        receiver: un
+        receiver: un,
       }],
-      isAccepted: true
+      isAccepted: true,
     }).select('-_id sender receiver');
-    let fReq = new Array(friendreqs.length)
-    for(let i = 0;i<friendreqs.length;i++) {
-      fReq[i] = friendreqs[i].sender
+    const fReq = new Array(friendreqs.length);
+    for (let i = 0; i < friendreqs.length; i += 1) {
+      fReq[i] = friendreqs[i].sender;
     }
-    let fr = []
-    for(let i = 0; i<accfriends.length; i++) {
-      if(accfriends[i].sender === un) fr[i] = accfriends[i].receiver
-      else if(accfriends[i].receiver === un) fr[i] = accfriends[i].sender
+    const fr = [];
+    for (let i = 0; i < accfriends.length; i += 1) {
+      if (accfriends[i].sender === un) fr[i] = accfriends[i].receiver;
+      else if (accfriends[i].receiver === un) fr[i] = accfriends[i].sender;
     }
-    res.json(JSON.stringify({ username: un, rooms: rooms, fReqs: friendreqs, fr: accfriends }));
+    res.json(JSON.stringify({
+      username: un, rooms, fReqs: friendreqs, fr: accfriends,
+    }));
   } catch (e) {
-    console.log(e)
-    next(e)
+    console.log(e);
+    next(e);
   }
-})
+});
 
-app.route('/').get(async (req, res, next) => {
+app.route('/').get(async (req: Request, res: Response, next: NextFunction) => {
   if (req.isUnauthenticated()) {
     res.redirect('login');
   } else {
     try {
-      const un = !req.session.username? req.user.username: req.session.username;
+      const un: string = !req.session.username? req.user.username: req.session.username;
       const rooms = await Room.find({
-        isDM: false
+        isDM: false,
       });
       const friendreqs = await Friend.find({
         receiver: un,
-        isAccepted: false
+        isAccepted: false,
       });
       const accfriends = await Friend.find({
         $or: [{
-          sender: un
+          sender: un,
         }, {
-          receiver: un
+          receiver: un,
         }],
-        isAccepted: true
-      })
-      res.render('main', { un, rooms, friendreqs, accfriends, title: 'UsualChat' });
+        isAccepted: true,
+      });
+      res.render('main', {
+        un, rooms, friendreqs, accfriends, title: 'UsualChat',
+      });
     } catch (error) {
       console.error(error);
       next(error);
@@ -178,74 +196,54 @@ app.route('/register')
             res.redirect('/');
           });
         }
-      }
+      },
     );
-  })
+  });
 
 app.route('/friend')
-  .post(async (req, res, next) => {
+  .post(async (req: Request, res: Response, next: NextFunction) => {
     let friend = await User.findOne({ username: req.body.friend })
     try {
-      if(!friend) {
+      if (!friend) {
         res.redirect('/?error=존재하지 않는 유저입니다.')
       } else {
         await Friend.create({
-          sender: req.session.username, 
-          receiver: req.body.friend 
-        })
-        res.send('ok')
+          sender: req.session.username,
+          receiver: req.body.friend,
+        });
+        res.send('ok');
       }
     } catch (error) {
       console.error(error);
       next(error);
     }})
-  .delete(async (req, res, next) => {
-    console.log(req.url)
-    res.send('ok')
-  })
+  .delete(async (req: Request, res: Response, next: NextFunction) => {
+    console.log(req.url);
+    res.send('ok');
+  });
 
 app.route('/friend/:id')
   .get((req, res) => {
-    res.send('ok')
+    res.send('ok');
   })
   .post(async (req, res) => {
     await Friend.findByIdAndUpdate({
-      _id: req.params.id
+      _id: req.params.id,
     }, {
-      isAccepted: true
-    })
-    res.redirect('/')
-  })
-  .delete(async (req, res) => {
-    console.log(req.url)
-    await Friend.find({
-      _id: req.params.id
-    }).then(async (items) => {
-      console.log(items[0])
-      await Room.deleteMany({
-        _id: items[0].dm
-      })
-      await Chat.deleteMany({
-        room: items[0].dm
-      })
-      await Flag.deleteMany({
-        room: items[0].dm
-      })
-    })
-    Friend.findByIdAndDelete({
-      _id: req.params.id
-    })
-    res.send('ok')
-  })
+      isAccepted: true,
+    });
+    res.redirect('/');
+  });
 
-app.post('/friend/:id/deletereq', async (req, res) => {
-  await Friend.findByIdAndDelete({
+app.post('/friend/:id/deletereq', async (req: Request, res: Response) => {
+  const f = await Friend.findByIdAndDelete({
     _id: req.params.id
-  })
-  res.redirect('/')
-})
+  });
+  console.log(f);
+  res.redirect('/');
+});
 
-app.post('/friend/:id/delete', async (req, res, next) => {
+app.post('/friend/:id/delete', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const friend = await Friend.find({
       _id: req.params.id
@@ -278,50 +276,50 @@ app.get('/unregister', async (req, res) => {
     }, {
       receiver: req.session.username
     }]
-  })
+  });
   await User.remove({ username: req.session.username });
   await Room.remove({ owner: req.session.username });
-  res.redirect('/login')
-})
+  res.redirect('/login');
+});
 
 app.route('/mobile/login')
-.get((req, res, next) => {
-  res.render('login', { strategy: 'jwt' })
-})
-.post(async (req, res, next) => {
-  try {
-    passport.authenticate('local', (error, user, info) => {
-      req.login(user, (err) => {
-        if(err) {
-          console.log(err)
-          next(err)
-        } else {
-          const token = jwt.sign({
-            id: user.id, name: user.name, auth: user.auth
-          }, process.env.COOKIE_SECRET)
-          const decoded = jwt.verify(token, process.env.COOKIE_SECRET)
-          console.log(decoded)
-          req.session.username = user.name;
-          res.json({ token });
-        }
-      })
-    })(req, res)
-  } catch (e) {
-    console.log(e)
-    next(e)
-  }
-})
+  .get((req: Request, res: Response, next: NextFunction) => {
+    res.render('login', { strategy: 'jwt' });
+  })
+  .post((req: Request, res: Response, next: NextFunction) => {
+    try {
+      passport.authenticate('local', (error, user, info) => {
+        req.login(user, (err) => {
+          if(err) {
+            console.log(err)
+            next(err)
+          } else {
+            const token = jwt.sign({
+              id: user.id, name: user.name, auth: user.auth
+            }, process.env.COOKIE_SECRET);
+            const decoded = jwt.verify(token, process.env.COOKIE_SECRET)
+            console.log(decoded);
+            req.session.username = user.name;
+            res.json({ token });
+          }
+        })
+      })(req, res);
+    } catch (e) {
+      console.log(e);
+      next(e);
+    }
+  });
 
 app.route('/login')
   .get((req, res) => {
     if (req.isAuthenticated()) {
       res.redirect('/');
     } else {
-    res.render('login', { strategy: 'default' });      
+      res.render('login', { strategy: 'default' });
     }
   })
   .post((req, res) => {
-    const user = new User({
+    const user: UserINF = new User({
       username: req.body.username,
       password: req.body.password,
     });
@@ -349,13 +347,12 @@ app.route('/room')
   .get((req, res) => {
     res.render('room', { title: 'UsualChat 채팅방 생성' });
   })
-  .post(async (req, res, next) => {
+  .post(async (req: Request, res: Response, next: NextFunction) => {
     try {
-      console.log(!!req.body.friend)
-      if(!!req.body.friend) {
-        req.body.title=req.body.friend;
+      if (req.body.friend === 'undefined') {
+        req.body.title = req.body.friend;
       }
-      const newRoom = await Room.create({
+      const newRoom: RoomINF = await Room.create({
         title: req.body.title,
         max: req.body.max,
         owner: req.session.username,
@@ -372,9 +369,9 @@ app.route('/room')
   });
 
 app.route('/dm')
-  .post(async (req, res, next) => {
+  .post(async (req: Request, res: Response, next: NextFunction) => {
     try {
-      let dmroomid = 0;
+      let dmroomid: mongoose.Types.ObjectId;
       const dm = await Room.find({
         isDM: true,
         $or: [{
@@ -383,16 +380,15 @@ app.route('/dm')
         }, {
           owner: req.body.friend,
           target: req.session.username
-        }]
+        }],
       }).then((rooms) => {
-        if(rooms.length === 0) {
+        if (rooms.length === 0) {
           return false;
-        } else {
-          dmroomid = rooms[0]._id;
-          return true;
         }
-      })
-      const friend = await Friend.find({
+        dmroomid = rooms[0]._id;
+        return true;
+      });
+      const friend = await Friend.findOne({
         $or: [{
           sender: req.body.friend,
           receiver: req.session.username
@@ -400,10 +396,10 @@ app.route('/dm')
           sender: req.session.username,
           receiver: req.body.friend
         }]
-      }).then((friends) => {
-        return friends[0]._id
-      })
-      if(dm===false) {
+      }).then((friends: FriendINF) => {
+        return friends[0]._id;
+      });
+      if (dm === false) {
         const newRoom = await Room.create({
           title: 'Direct Message',
           max: 2,
@@ -428,7 +424,7 @@ app.route('/dm')
   })
 
 app.route('/room/:id')
-  .get(async (req, res, next) => {
+  .get(async (req: Request, res: Response, next: NextFunction) => {
     try {
       const room = await Room.findOne({ _id: req.params.id });
       const io = req.app.get('io');
@@ -474,7 +470,7 @@ app.route('/room/:id')
       return next(error);
     }
   })
-  .delete(async (req, res, next) => {
+  .delete(async (req: Request, res: Response, next: NextFunction) => {
     let roomid = await Room.findById({ _id: req.params.id });
     if (roomid.owner === req.session.username) {
       try {
@@ -492,7 +488,7 @@ app.route('/room/:id')
     }
   })
 
-app.post('/room/:id/clearchat', async (req, res, next) => {
+app.post('/room/:id/clearchat', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const room = await Room.findById({ _id: req.params.id });
     if(room.owner === req.session.username) {
@@ -512,7 +508,7 @@ app.post('/room/:id/clearchat', async (req, res, next) => {
   }
 })
 
-app.route('/room/:id/chat').post(async (req, res, next) => {
+app.route('/room/:id/chat').post(async (req: Request, res: Response, next: NextFunction) => {
   try {
     const chat = await Chat.create({
       room: req.params.id,
@@ -548,7 +544,7 @@ const upload = multer({
   limits: { fileSize: 5 * 1024 * 1024 * 1024 },
 });
 
-app.post('/room/:id/img', upload.single('img'), async (req, res, next) => {
+app.post('/room/:id/img', upload.single('img'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const chat = await Chat.create({
       room: req.params.id,
@@ -563,7 +559,7 @@ app.post('/room/:id/img', upload.single('img'), async (req, res, next) => {
   }
 });
 
-app.post('/room/:id/file', upload.single('file'), async (req, res, next) => {
+app.post('/room/:id/file', upload.single('file'), async (req: Request, res: Response, next: NextFunction) => {
   try {
     const chat = await Chat.create({
       room: req.params.id,
@@ -578,12 +574,13 @@ app.post('/room/:id/file', upload.single('file'), async (req, res, next) => {
   }
 })
 
-app.use((req, res, next) => {
+app.use((req: Request, res: Response, next: NextFunction) => {
   const error = new Error(`${req.method} ${req.url} 라우터가 없습니다.`);
   error.status = 404;
   next(error);
 });
-app.use((err, req, res, next) => {
+app.use((err, req: Request, res: Response, next: NextFunction) => {
+  console.log(err);
   res.locals.message = err.message;
   res.locals.error = process.env.NODE_ENV !== 'production' ? err : {};
   res.status(err.status || 500);
