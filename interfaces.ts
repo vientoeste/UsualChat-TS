@@ -42,3 +42,7 @@ export interface UserINF {
   username: string,
   password: string,
 }
+
+export interface Username {
+  username: string,
+}

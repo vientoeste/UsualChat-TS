@@ -21,7 +21,12 @@ import { Room } from './schemas/room';
 import { Chat } from './schemas/chat';
 import { Friend } from './schemas/friend';
 import { Flag } from './schemas/flag';
-import { FriendINF, RoomINF, UserINF } from './interfaces';
+import {
+  FriendINF,
+  RoomINF,
+  UserINF,
+  Username,
+} from './interfaces';
 
 const { ExtractJwt } = PassJWT;
 const JWTStrategy = PassJWT.Strategy;
@@ -78,9 +83,8 @@ const userSchema = new mongoose.Schema({
 
 userSchema.plugin(passportLocalMongoose);
 
-const User: passportLocalMongoose.PassportLocalModel<UserINF & mongoose.Document> = mongoose.model<UserINF & mongoose.Document>('User', userSchema);
+const User = mongoose.model<UserINF & mongoose.Document>('User', userSchema);
 
-// eslint-disable-next-line @typescript-eslint/no-unsafe-argument
 passport.use(User.createStrategy());
 
 const JWTConfig = {
@@ -111,7 +115,6 @@ passport.deserializeUser(User.deserializeUser());
 
 app.route('/mobile').get(passport.authenticate('jwt'), async (req: Request, res: Response, next: NextFunction) => {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     const un: string = req.user.username || 'undefined';
     if (un === 'undefined') {
       throw Error('username undefined');
@@ -155,24 +158,26 @@ app.route('/').get(async (req: Request, res: Response, next: NextFunction) => {
     res.redirect('login');
   } else {
     try {
-      const un: string = !req.session.username? req.user.username: req.session.username;
+      const {
+        username,
+      } = req.session as unknown as Username;
       const rooms = await Room.find({
         isDM: false,
       });
       const friendreqs = await Friend.find({
-        receiver: un,
+        receiver: username,
         isAccepted: false,
       });
       const accfriends = await Friend.find({
         $or: [{
-          sender: un,
+          sender: username,
         }, {
-          receiver: un,
+          receiver: username,
         }],
         isAccepted: true,
       });
       res.render('main', {
-        un, rooms, friendreqs, accfriends, title: 'UsualChat',
+        username, rooms, friendreqs, accfriends, title: 'UsualChat',
       });
     } catch (error) {
       console.error(error);
@@ -182,8 +187,8 @@ app.route('/').get(async (req: Request, res: Response, next: NextFunction) => {
 });
 
 app.route('/register')
-  .post((req, res) => {
-    User.register(
+  .post(async (req, res) => {
+    await User.register(
       { username: req.body.username },
       req.body.password,
       (err, newUser) => {
@@ -202,10 +207,11 @@ app.route('/register')
 
 app.route('/friend')
   .post(async (req: Request, res: Response, next: NextFunction) => {
-    let friend = await User.findOne({ username: req.body.friend })
+    const { username } = req.body as Username;
+    const friend: FriendINF | string = await User.findOne({ username }) || 'undefined';
     try {
       if (!friend) {
-        res.redirect('/?error=존재하지 않는 유저입니다.')
+        res.redirect('/?error=존재하지 않는 유저입니다.');
       } else {
         await Friend.create({
           sender: req.session.username,
@@ -216,10 +222,7 @@ app.route('/friend')
     } catch (error) {
       console.error(error);
       next(error);
-    }})
-  .delete(async (req: Request, res: Response, next: NextFunction) => {
-    console.log(req.url);
-    res.send('ok');
+    }
   });
 
 app.route('/friend/:id')
@@ -263,7 +266,7 @@ app.post('/friend/:id/delete', async (req: Request, res: Response, next: NextFun
       _id: req.params.id
     })
   res.redirect('/')
-  } catch(error) {
+  } catch (error) {
     console.log(error)
     next(error)
   }
@@ -290,7 +293,7 @@ app.route('/mobile/login')
     try {
       passport.authenticate('local', (error, user, info) => {
         req.login(user, (err) => {
-          if(err) {
+          if (err) {
             console.log(err)
             next(err)
           } else {
@@ -406,22 +409,22 @@ app.route('/dm')
           owner: req.session.username,
           isDM: true,
           target: req.body.friend,
-        })
+        });
         await Friend.findOneAndUpdate({
           _id: friend
         }, {
           dm: newRoom._id,
-        })
+        });
         console.log(`dm 생성 - id: ${newRoom._id}`)
         res.redirect(`/room/${newRoom._id}`);
       } else {
         res.redirect(`/room/${dmroomid}`);
       }
-    } catch(error) {
+    } catch (error) {
       console.log(error);
       next(error);
     }
-  })
+  });
 
 app.route('/room/:id')
   .get(async (req: Request, res: Response, next: NextFunction) => {
@@ -436,25 +439,24 @@ app.route('/room/:id')
       }
       const { rooms } = io.of('/chat').adapter;
       if (
-        rooms &&
-        rooms[req.params.id] &&
-        room.max <= rooms[req.params.id].length
+        rooms
+        && rooms[req.params.id]
+        && room.max <= rooms[req.params.id].length
       ) {
         return res.redirect('/?error=허용 인원을 초과하였습니다.');
       }
       const flag = await Flag.find({
         username: req.session.username,
-        room: req.params.id
+        room: req.params.id,
       }).then((items) => {
-        if(items.length===0) {
-          return false
-        } else {
-          return items[0]
+        if (items.length === 0) {
+          return false;
         }
-      })
+        return items[0];
+      });
 
       let chats;
-      if(!flag) {
+      if (!flag) {
         chats = await Chat.find({ room: room._id }).sort('createdAt');
       } else {
         chats = await Chat.find({ room: room._id, createdAt: {$gt: flag.deletedAt} }).sort('createdAt')
@@ -480,18 +482,18 @@ app.route('/room/:id')
         await Room.deleteMany({ _id: req.params.id });
         await Chat.deleteMany({ room: req.params.id });
         await Flag.deleteMany({ room: req.params.id });
-        res.redirect('/')
+        res.redirect('/');
       } catch (error) {
         console.error(error);
         next(error);
       }
     }
-  })
+  });
 
 app.post('/room/:id/clearchat', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const room = await Room.findById({ _id: req.params.id });
-    if(room.owner === req.session.username) {
+    if (room.owner === req.session.username) {
       await Chat.deleteMany({
         room: req.params.id
       })
@@ -502,11 +504,11 @@ app.post('/room/:id/clearchat', async (req: Request, res: Response, next: NextFu
       })
     }
     res.send('ok')
-  } catch(error) {
+  } catch (error) {
     console.log(error);
     next(error);
   }
-})
+});
 
 app.route('/room/:id/chat').post(async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -537,7 +539,7 @@ const upload = multer({
     },
     filename(req, file, done) {
       const ext = path.extname(file.originalname);
-      done(null, path.basename(file.originalname, ext) + Date.now() + ext);
+      done(null, `${path.basename(file.originalname, ext)} + ${Date.now()} + ${ext}`);
       console.log(`${path.basename(file.originalname, ext)} / ${Date.now()} / ${ext}`);
     },
   }),
@@ -565,7 +567,7 @@ app.post('/room/:id/file', upload.single('file'), async (req: Request, res: Resp
       room: req.params.id,
       user: req.session.username,
       file: req.file.filename,
-    })
+    });
     req.app.get('io').of('/chat').to(req.params.id).emit('chat', chat);
     res.send('ok');
   } catch (error) {
