@@ -38,7 +38,7 @@ export interface ChatINF {
 }
 
 export interface UserINF {
-  _id: mongoose.Types.ObjectId,
+  _id?: mongoose.Types.ObjectId,
   username: string,
   password: string,
 }
