@@ -12,7 +12,7 @@ export interface RoomINF {
 }
 
 export interface FriendINF {
-  _id: mongoose.Types.ObjectId,
+  _id?: mongoose.Types.ObjectId,
   sender: string,
   receiver: string,
   isAccepted: boolean,
@@ -21,14 +21,14 @@ export interface FriendINF {
 }
 
 export interface FlagINF {
-  _id: mongoose.Types.ObjectId,
+  _id?: mongoose.Types.ObjectId,
   username: string,
   room: mongoose.Types.ObjectId,
   deletedAt: Date,
 }
 
 export interface ChatINF {
-  _id: mongoose.Types.ObjectId,
+  _id?: mongoose.Types.ObjectId,
   room: mongoose.Types.ObjectId,
   user: string,
   chat: string,

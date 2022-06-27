@@ -8,15 +8,15 @@ import morgan from 'morgan';
 import session from 'express-session';
 import cookieParser from 'cookie-parser';
 import passport from 'passport';
-import mongoose from 'mongoose';
+import mongoose, { Document } from 'mongoose';
 import fs from 'fs';
 import multer from 'multer';
 import resTime from 'response-time';
 import chalk from 'chalk';
 import jwt from 'jsonwebtoken';
 import PassJWT from 'passport-jwt';
-import connect from './schemas';
 import type { ErrorRequestHandler } from 'express';
+import connect from './schemas';
 import { webSocket } from './socket';
 import { Room } from './schemas/room';
 import { Chat } from './schemas/chat';
@@ -35,9 +35,18 @@ const JWTStrategy = PassJWT.Strategy;
 
 dotenv.config();
 
+interface ENV {
+  COOKIE_SECRET?: string,
+  MONGO_ID?: string,
+  MONGO_PASSWORD?: string,
+  PORT?: number,
+  NODE_ENV?: string,
+}
+const env: ENV = process.env as unknown as ENV;
+
 const app: express.Application = express.default();
 
-app.set('port', process.env.PORT || 3001);
+app.set('port', env.PORT || 3001);
 app.set('view engine', 'njk');
 
 nunjucks.configure('views', {
@@ -48,7 +57,7 @@ nunjucks.configure('views', {
 const sessionMiddleware: express.RequestHandler = session({
   resave: false,
   saveUninitialized: false,
-  secret: process.env.COOKIE_SECRET || 'default',
+  secret: env.COOKIE_SECRET || 'default',
   cookie: {
     httpOnly: true,
     secure: false,
@@ -62,7 +71,7 @@ app.use('/img', express.static(path.join(__dirname, 'uploads')));
 app.use('/file', express.static(path.join(__dirname, 'uploads')));
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
-app.use(cookieParser(process.env.COOKIE_SECRET));
+app.use(cookieParser(env.COOKIE_SECRET));
 app.use(sessionMiddleware);
 app.use(resTime((req: Request, res: Response, time: number) => {
   if (time >= 1000) {
@@ -73,9 +82,9 @@ app.use(resTime((req: Request, res: Response, time: number) => {
 app.use(passport.initialize());
 app.use(passport.session());
 
-connect(process.env.MONGO_ID || 'default',
-  process.env.MONGO_PASSWORD || 'default',
-  process.env.NODE_ENV || 'default');
+connect(env.MONGO_ID || 'default',
+  env.MONGO_PASSWORD || 'default',
+  env.NODE_ENV || 'default');
 
 const userSchema = new mongoose.Schema({
   username: String,
@@ -90,19 +99,23 @@ passport.use(User.createStrategy());
 
 const JWTConfig = {
   jwtFromRequest: ExtractJwt.fromHeader('authorization'),
-  secretOrKey: process.env.COOKIE_SECRET,
+  secretOrKey: env.COOKIE_SECRET,
 };
 
-const JWTVerify = async (jwtPayload, cb: (e: Error,
+interface JwtPayload {
+  id: mongoose.ObjectId,
+}
+const JWTVerify = async (jwtPayload: JwtPayload, cb: (e: Error,
   isSucceed?: UserINF | boolean,
   reason?: { [key: string]: string }) => void) => {
   try {
-    const user: UserINF = await User.findById({ _id: jwtPayload.id });
-    if (user) {
+    const user: UserINF | null = await User.findById({ _id: jwtPayload.id });
+    if (!user) {
+      cb(null, null, { reason: '인증 실패' });
+    } else {
       cb(null, user);
       return;
     }
-    cb(null, false, { reason: '인증 실패' });
   } catch (error) {
     console.error(error);
     cb(error);
@@ -221,16 +234,15 @@ app.route('/friend')
       friend: string,
     }
     const { username, friend } = req.body as ReqBody;
-    const friendQuery: FriendINF | null = await User.findOne({ username }).then((item) => item);
     try {
-      if (!friendQuery) {
-        res.redirect('/?error=존재하지 않는 유저입니다.');
-      } else {
+      if (!await User.findOne({ username })) {
         await Friend.create({
           sender: username,
           receiver: friend,
         });
         res.send('ok');
+      } else {
+        res.redirect('/?error=존재하지 않는 유저입니다.');
       }
     } catch (error) {
       console.error(error);
@@ -251,19 +263,23 @@ app.route('/friend/:id')
     res.redirect('/');
   });
 
-app.post('/friend/:id/deletereq', async (req: Request, res: Response, next: NextFunction) => {
-  await Friend.findByIdAndDelete({
-    _id: req.params.id,
-  }).then((f) => {
-    console.log(f);
+app.post('/friend/:id/deletereq', async (req: Request,
+  res: Response,
+  next: NextFunction) => {
+  try {
+    await Friend.findByIdAndDelete({
+      _id: req.params.id,
+    });
     res.redirect('/');
-  }).catch((e) => {
-    console.log(e);
-    next(e);
-  });
+  } catch (error) {
+    console.log(error);
+    next(error);
+  }
 });
 
-app.post('/friend/:id/delete', await (req: Request, res: Response, next: NextFunction) => {
+app.post('/friend/:id/delete', async (req: Request,
+  res: Response,
+  next: NextFunction) => {
   try {
     const friend = Friend.find({
       _id: req.params.id,
@@ -295,8 +311,8 @@ app.post('/friend/:id/delete', await (req: Request, res: Response, next: NextFun
   }
 });
 
-app.get('/unregister', async (req, res) => {
-  const username = req.session as unknown as Username;
+app.get('/unregister', async (req: Request, res: Response) => {
+  const { username } = req.session as unknown as Username;
   await Friend.deleteMany({
     $or: [{
       sender: username,
@@ -310,10 +326,14 @@ app.get('/unregister', async (req, res) => {
 });
 
 app.route('/mobile/login')
-  .get((req: Request, res: Response, next: NextFunction) => {
+  .get((req: Request, res: Response) => {
     res.render('login', { strategy: 'jwt' });
   })
   .post((req: Request, res: Response, next: NextFunction) => {
+    type Tmp = session.Session & Partial<session.SessionData> & {
+      username?: string,
+    };
+    const newSession: Tmp = req.session;
     try {
       passport.authenticate('local', (error, user, info) => {
         req.login(user, (err) => {
@@ -323,10 +343,10 @@ app.route('/mobile/login')
           } else {
             const token = jwt.sign({
               id: user.id, name: user.name, auth: user.auth,
-            }, process.env.COOKIE_SECRET);
-            const decoded = jwt.verify(token, process.env.COOKIE_SECRET);
+            }, env.COOKIE_SECRET as jwt.Secret);
+            const decoded = jwt.verify(token, env.COOKIE_SECRET as jwt.Secret);
             console.log(decoded);
-            req.session.username = user.name;
+            newSession.username = user.name;
             res.json({ token });
           }
         });
@@ -431,50 +451,65 @@ app.route('/room')
 // room - POST와 통합
 app.route('/dm')
   .post(async (req: Request, res: Response, next: NextFunction) => {
+    const { username } = req.session as unknown as Username;
+    interface ReqBody {
+      friend: string,
+    }
+    const { friend } = req.body as ReqBody;
     try {
-      let dmroomid: mongoose.Types.ObjectId;
-      const dm = await Room.find({
+      // let dmroomid: mongoose.Types.ObjectId;
+      // interface RoomINFQueryResult extends Document{
+      //   _id: mongoose.Types.ObjectId,
+      //   title: string,
+      //   max: number,
+      //   owner: string,
+      //   password: string,
+      //   createdAt: Date,
+      //   isDM: boolean,
+      //   target: string,
+      // }
+      const dm: RoomINF & Document | null = await Room.findOne({
         isDM: true,
         $or: [{
-          owner: req.session.username,
-          target: req.body.friend,
+          owner: username,
+          target: friend,
         }, {
-          owner: req.body.friend,
-          target: req.session.username,
+          owner: friend,
+          target: username,
         }],
-      }).then((rooms) => {
-        if (rooms.length === 0) {
-          return false;
-        }
-        dmroomid = rooms[0]._id;
-        return true;
       });
-      const friend = await Friend.findOne({
+      await Friend.findOne({
         $or: [{
-          sender: req.body.friend,
-          receiver: req.session.username,
+          sender: friend,
+          receiver: username,
         }, {
-          sender: req.session.username,
-          receiver: req.body.friend,
+          sender: username,
+          receiver: friend,
         }],
-      }).then((friends: FriendINF) => friends[0]._id);
-      if (dm === false) {
-        const newRoom = await Room.create({
+      });
+      if (!dm) {
+        const newRoom: RoomINF & Document = await Room.create({
           title: 'Direct Message',
           max: 2,
-          owner: req.session.username,
+          owner: username,
           isDM: true,
-          target: req.body.friend,
+          target: friend,
         });
-        await Friend.findOneAndUpdate({
-          _id: friend,
-        }, {
-          dm: newRoom._id,
+        await Friend.findOne({
+          $or: [{
+            sender: friend,
+            receiver: username,
+          }, {
+            sender: username,
+            receiver: friend,
+          }],
+        }).updateOne({}, {
+          dm: newRoom._id as mongoose.ObjectId,
         });
         console.log(`dm 생성 - id: ${newRoom._id}`);
         res.redirect(`/room/${newRoom._id}`);
       } else {
-        res.redirect(`/room/${dmroomid}`);
+        res.redirect(`/room/${dm._id as string}`);
       }
     } catch (error) {
       console.log(error);
@@ -559,7 +594,7 @@ app.post('/room/:id/clearchat', async (req: Request, res: Response) => {
         });
       } else {
         await Flag.create({
-          username: req.session.username,
+          username: username,
           room: req.params.id,
         });
         res.send('ok');
@@ -568,10 +603,11 @@ app.post('/room/:id/clearchat', async (req: Request, res: Response) => {
 });
 
 app.route('/room/:id/chat').post(async (req: Request, res: Response, next: NextFunction) => {
+  const { username } = req.session as unknown as Username;
   try {
     const chat = await Chat.create({
       room: req.params.id,
-      user: req.session.username,
+      user: username,
       chat: req.body.chat,
     });
     req.app.get('io').of('/chat').to(req.params.id).emit('chat', chat);
@@ -604,10 +640,11 @@ const upload = multer({
 });
 
 app.post('/room/:id/img', upload.single('img'), async (req: Request, res: Response, next: NextFunction) => {
+  const { username } = req.session as unknown as Username;
   try {
     const chat = await Chat.create({
       room: req.params.id,
-      user: req.session.username,
+      user: username,
       img: req.file.filename,
     });
     req.app.get('io').of('/chat').to(req.params.id).emit('chat', chat);
@@ -619,10 +656,11 @@ app.post('/room/:id/img', upload.single('img'), async (req: Request, res: Respon
 });
 
 app.post('/room/:id/file', upload.single('file'), async (req: Request, res: Response, next: NextFunction) => {
+  const { username } = req.session as unknown as Username;
   try {
     const chat = await Chat.create({
       room: req.params.id,
-      user: req.session.username,
+      user: username,
       file: req.file.filename,
     });
     req.app.get('io').of('/chat').to(req.params.id).emit('chat', chat);
@@ -644,7 +682,7 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 const errorHandler: ErrorRequestHandler = (err, req, res: Response, next) => {
   console.log(err);
   res.locals.message = err.message;
-  res.locals.error = process.env.NODE_ENV !== 'production' ? err : {};
+  res.locals.error = env.NODE_ENV !== 'production' ? err : {};
   res.status(err.status || 500);
   res.render('error');
 };
