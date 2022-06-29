@@ -23,6 +23,7 @@ import { Chat } from './schemas/chat';
 import { Friend } from './schemas/friend';
 import { Flag } from './schemas/flag';
 import {
+  FlagINF,
   FriendINF,
   RoomINF,
   UserINF,
@@ -263,7 +264,7 @@ app.route('/friend/:id')
     res.redirect('/');
   });
 
-app.post('/friend/:id/deletereq', async (req: Request,
+app.route('/friend/:id/deletereq').post(async (req: Request,
   res: Response,
   next: NextFunction) => {
   try {
@@ -277,51 +278,59 @@ app.post('/friend/:id/deletereq', async (req: Request,
   }
 });
 
-app.post('/friend/:id/delete', async (req: Request,
+app.route('/friend/:id/delete').post(async (req: Request,
   res: Response,
   next: NextFunction) => {
   try {
-    const friend = Friend.find({
-      _id: req.params.id,
-    }).then(async (items) => {
-      console.log(items[0]);
-      await Room.deleteMany({
-        _id: items[0].dm,
-      }).then(() => {
-        console.log('room deleted');
-      });
-      await Chat.deleteMany({
-        room: items[0].dm,
-      }).then(() => {
-        console.log('chat deleted');
-      });
-      await Flag.deleteMany({
-        room: items[0].dm,
-      }).then(() => {
-        console.log('flag deleted');
-      });
-    });
-    await Friend.findByIdAndDelete({
+    const friend: FriendINF & Document | null = await Friend.findById({
       _id: req.params.id,
     });
-    res.redirect('/');
+    if (!friend) {
+      res.status(400).send('check id again');
+    } else {
+      await Room.find({
+        _id: friend.dm,
+      }).deleteMany({});
+
+      await Chat.find({
+        room: friend.dm,
+      }).deleteMany({});
+
+      await Flag.find({
+        room: friend.dm,
+      }).deleteMany({});
+
+      await Friend.findById({
+      _id: req.params.id,
+      }).deleteOne({});
+
+      res.redirect('/');
+    }
   } catch (error) {
     console.log(error);
     next(error);
   }
 });
 
-app.get('/unregister', async (req: Request, res: Response) => {
+app.route('/unregister').get(async (req: Request, res: Response) => {
   const { username } = req.session as unknown as Username;
-  await Friend.deleteMany({
+  await Friend.find({
     $or: [{
       sender: username,
     }, {
       receiver: username,
     }],
-  });
-  await User.remove({ username });
-  await Room.remove({ owner: username });
+  }).deleteMany({});
+
+  await User.find({
+    username,
+  }).deleteMany({});
+
+  await Room.find({
+    owner: username,
+  }).deleteMany({});
+  // await User.remove({ username });
+  // await Room.remove({ owner: username });
   res.redirect('/login');
 });
 
@@ -478,15 +487,15 @@ app.route('/dm')
           target: username,
         }],
       });
-      await Friend.findOne({
-        $or: [{
-          sender: friend,
-          receiver: username,
-        }, {
-          sender: username,
-          receiver: friend,
-        }],
-      });
+      // await Friend.findOne({
+      //   $or: [{
+      //     sender: friend,
+      //     receiver: username,
+      //   }, {
+      //     sender: username,
+      //     receiver: friend,
+      //   }],
+      // });
       if (!dm) {
         const newRoom: RoomINF & Document = await Room.create({
           title: 'Direct Message',
@@ -504,10 +513,10 @@ app.route('/dm')
             receiver: friend,
           }],
         }).updateOne({}, {
-          dm: newRoom._id as mongoose.ObjectId,
+          dm: new mongoose.Types.ObjectId(newRoom.id),
         });
-        console.log(`dm 생성 - id: ${newRoom._id}`);
-        res.redirect(`/room/${newRoom._id}`);
+        console.log(`dm 생성 - id: ${newRoom._id as string}`);
+        res.redirect(`/room/${newRoom._id as string}`);
       } else {
         res.redirect(`/room/${dm._id as string}`);
       }
@@ -521,7 +530,7 @@ app.route('/room/:id')
   .get(async (req: Request, res: Response, next: NextFunction) => {
     const { username } = req.session as unknown as Username;
     try {
-      const room = await Room.findOne({ _id: req.params.id });
+      const room: RoomINF | null = await Room.findOne({ _id: req.params.id });
       const io = req.app.get('io');
       if (!room) {
         return res.redirect('/');
@@ -537,14 +546,9 @@ app.route('/room/:id')
       ) {
         return res.redirect('/?error=허용 인원을 초과하였습니다.');
       }
-      const flag = await Flag.find({
+      const flag: FlagINF | null = await Flag.find({
         username,
         room: req.params.id,
-      }).then((items) => {
-        if (items.length === 0) {
-          return false;
-        }
-        return items[0];
       });
 
       let chats;
@@ -582,11 +586,13 @@ app.route('/room/:id')
 //   }
 // });
 
-app.post('/room/:id/clearchat', async (req: Request, res: Response) => {
+app.route('/room/:id/clearchat').post(async (req: Request, res: Response) => {
   const { username } = req.session as unknown as Username;
   await Room.findById({ _id: req.params.id })
-    .then((item) => {
-      if (item.owner === username) {
+    .then(async (item: RoomINF | null) => {
+      if (!item) {
+        res.status(400).send('error');
+      } else if (item.owner === username) {
         await Chat.deleteMany({
           room: req.params.id,
         }).then(() => {
@@ -594,7 +600,7 @@ app.post('/room/:id/clearchat', async (req: Request, res: Response) => {
         });
       } else {
         await Flag.create({
-          username: username,
+          username,
           room: req.params.id,
         });
         res.send('ok');
@@ -604,11 +610,15 @@ app.post('/room/:id/clearchat', async (req: Request, res: Response) => {
 
 app.route('/room/:id/chat').post(async (req: Request, res: Response, next: NextFunction) => {
   const { username } = req.session as unknown as Username;
+  interface ChatINF {
+    newChat: string,
+  }
+  const { newChat } = req.body as unknown as ChatINF;
   try {
     const chat = await Chat.create({
       room: req.params.id,
       user: username,
-      chat: req.body.chat,
+      chat: newChat,
     });
     req.app.get('io').of('/chat').to(req.params.id).emit('chat', chat);
     res.send('ok');
@@ -641,11 +651,15 @@ const upload = multer({
 
 app.post('/room/:id/img', upload.single('img'), async (req: Request, res: Response, next: NextFunction) => {
   const { username } = req.session as unknown as Username;
+  interface File {
+    filename: string,
+  }
+  const { filename } = req.file as unknown as File;
   try {
     const chat = await Chat.create({
       room: req.params.id,
       user: username,
-      img: req.file.filename,
+      img: filename,
     });
     req.app.get('io').of('/chat').to(req.params.id).emit('chat', chat);
     res.send('ok');
@@ -657,11 +671,15 @@ app.post('/room/:id/img', upload.single('img'), async (req: Request, res: Respon
 
 app.post('/room/:id/file', upload.single('file'), async (req: Request, res: Response, next: NextFunction) => {
   const { username } = req.session as unknown as Username;
+  interface File {
+    filename: string,
+  }
+  const { filename } = req.file as unknown as File;
   try {
     const chat = await Chat.create({
       room: req.params.id,
       user: username,
-      file: req.file.filename,
+      file: filename,
     });
     req.app.get('io').of('/chat').to(req.params.id).emit('chat', chat);
     res.send('ok');

@@ -1,36 +1,16 @@
+import * as express from 'express';
 import cookieParser from 'cookie-parser';
-// import { SocketIO } from 'socket.io';
+import SocketIO from 'socket.io';
+import SocketIOModule = module("socket.io");
 
-// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-const SocketIO = require('socket.io');
-
-export interface ServerToClientEvents {
-  noArg: () => void;
-  basicEmit: (a: number, b: string, c: Buffer) => void;
-  withAck: (d: string, callback: (e: number) => void) => void;
-}
-
-export interface ClientToServerEvents {
-  hello: () => void;
-}
-
-export interface InterServerEvents {
-  ping: () => void;
-}
-
-export interface SocketData {
-  name: string;
-  age: number;
-}
-
-export function webSocket(server, app, sessionMiddleware): void {
+export function webSocket(server: unknown, app: express.Application, sessionMiddleware: express.RequestHandler): void {
   const io = SocketIO(server, { path: '/socket.io' });
 
   app.set('io', io);
   const room = io.of('/room');
   const chat = io.of('/chat');
 
-  io.use((socket, next) => {
+  io.use((socket, next: express.NextFunction) => {
     cookieParser(process.env.COOKIE_SECRET)(socket.request, socket.request.res, next);
     sessionMiddleware(socket.request, socket.request.res, next);
   });
