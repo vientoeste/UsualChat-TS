@@ -15,9 +15,11 @@ import resTime from 'response-time';
 import chalk from 'chalk';
 import jwt from 'jsonwebtoken';
 import PassJWT from 'passport-jwt';
+// import SocketIO from 'socket.io';
 import type { ErrorRequestHandler } from 'express';
+import SocketIO = module("socket.io");
 import connect from './schemas';
-import { webSocket } from './socket';
+// import { webSocket } from './socket.io';
 import { Room } from './schemas/room';
 import { Chat } from './schemas/chat';
 import { Friend } from './schemas/friend';
@@ -106,18 +108,18 @@ const JWTConfig = {
 interface JwtPayload {
   id: mongoose.ObjectId,
 }
-const JWTVerify = async (jwtPayload: JwtPayload, cb: (e: Error,
+const JWTVerify = async (jwtPayload: JwtPayload, cb: (e: Error | null,
   isSucceed?: UserINF | boolean,
   reason?: { [key: string]: string }) => void) => {
   try {
     const user: UserINF | null = await User.findById({ _id: jwtPayload.id });
     if (!user) {
-      cb(null, null, { reason: '인증 실패' });
+      cb(null, false, { reason: '인증 실패' });
     } else {
       cb(null, user);
       return;
     }
-  } catch (error) {
+  } catch (error: express.ErrorRequestHandler) {
     console.error(error);
     cb(error);
   }
@@ -126,6 +128,7 @@ const JWTVerify = async (jwtPayload: JwtPayload, cb: (e: Error,
 passport.use('jwt', new JWTStrategy(JWTConfig, JWTVerify));
 
 passport.serializeUser(User.serializeUser());
+// passport.serializeUser()
 passport.deserializeUser(User.deserializeUser());
 
 app.route('/mobile').get(passport.authenticate('jwt'), async (req: Request, res: Response, next: NextFunction) => {
@@ -401,9 +404,11 @@ app.route('/login')
 
 app.route('/logout')
   .get((req, res) => {
-    req.logout();
-    req.session.destroy();
-    res.redirect('/');
+    req.logout((): void => {
+      req.session.destroy(function () {
+        res.redirect('/');
+      });
+    });
   });
 
 app.route('/room')
@@ -448,7 +453,7 @@ app.route('/room')
           isDM: true,
         });
       }
-      const io = req.app.get('io');
+      // const io = req.app.get('io');
       io.of('/room').emit('newRoom', newRoom);
       res.redirect(`/room/${newRoom._id as unknown as string}?password=${password as string}`);
     } catch (error) {
@@ -513,7 +518,7 @@ app.route('/dm')
             receiver: friend,
           }],
         }).updateOne({}, {
-          dm: new mongoose.Types.ObjectId(newRoom.id),
+          dm: newRoom.id,
         });
         console.log(`dm 생성 - id: ${newRoom._id as string}`);
         res.redirect(`/room/${newRoom._id as string}`);
@@ -546,7 +551,7 @@ app.route('/room/:id')
       ) {
         return res.redirect('/?error=허용 인원을 초과하였습니다.');
       }
-      const flag: FlagINF | null = await Flag.find({
+      const flag: FlagINF | null = await Flag.findOne({
         username,
         room: req.params.id,
       });
@@ -710,4 +715,48 @@ const server = app.listen(app.get('port'), () => {
   console.log(app.get('port'), '번 포트에서 대기 중');
 });
 
-webSocket(server, app, sessionMiddleware);
+// webSocket(server, app, sessionMiddleware);
+const io = SocketIO(server, { path: '/socket.io' });
+
+app.set('io', io);
+const room = io.of('/room');
+const chat = io.of('/chat');
+
+io.use((socket: any, next: express.NextFunction) => {
+  cookieParser(process.env.COOKIE_SECRET)(socket.request, socket.request.res, next);
+  sessionMiddleware(socket.request, socket.request.res, next);
+});
+
+room.on('connection', (socket: any) => {
+  console.log('room 네임스페이스에 접속');
+  socket.on('disconnect', () => {
+    console.log('room 네임스페이스 접속 해제');
+  });
+});
+
+chat.on('connection', (socket: any) => {
+  console.log('chat 네임스페이스에 접속');
+  const req = socket.request;
+  const { headers: { referer } } = req;
+  const roomId = referer
+    .split('/')[referer.split('/').length - 1]
+    .replace(/\?.+/, '');
+  socket.join(roomId);
+  socket.to(roomId).emit('join', {
+    user: 'system',
+    chat: `${req.session.username}님이 입장하셨습니다.`,
+  });
+
+  socket.on('disconnect', () => {
+    console.log('chat 네임스페이스 접속 해제');
+    socket.leave(roomId);
+    socket.to(roomId).emit('exit', {
+      user: 'system',
+      chat: `${req.session.username}님이 퇴장하셨습니다.`,
+    });
+  });
+
+  socket.on('chat', (data: any) => {
+    socket.to(data.room).emit(data);
+  });
+});

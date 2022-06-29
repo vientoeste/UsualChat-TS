@@ -1,3 +1,4 @@
+import * as express from 'express';
 import mongoose = require('mongoose');
 
 export function connectRepeat(dbid: string, dbpw: string, env: string) {
@@ -27,7 +28,7 @@ export default function connect(dbid: string, dbpw: string, env: string): void {
 
   mongoose.set('useCreateIndex', true);
 
-  mongoose.connection.on('error', (error) => {
+  mongoose.connection.on('error', (error: express.ErrorRequestHandler) => {
     console.error('MongoDB - connection error', error);
   });
 

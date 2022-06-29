@@ -12,12 +12,12 @@ export interface RoomINF {
 }
 
 export interface FriendINF {
-  _id?: mongoose.Types.ObjectId,
+  _id: mongoose.Types.ObjectId,
   sender: string,
   receiver: string,
   isAccepted: boolean,
   createdAt: Date,
-  dm: boolean,
+  dm: mongoose.Types.ObjectId,
 }
 
 export interface FlagINF {
